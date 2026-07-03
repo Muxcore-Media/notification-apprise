@@ -1,0 +1,16 @@
+{
+  "name": "Notification Apprise",
+  "description": "Apprise multi-platform notification provider (Slack, Telegram, Pushover, 100+ services via Apprise API)",
+  "version": "0.1.0",
+  "author": "MuxCore",
+  "roles": ["notification"],
+  "capabilities": ["notification.apprise"],
+  "contracts": [
+    {
+      "repo": "github.com/Muxcore-Media/contracts-notification",
+      "interface": "NotificationProvider",
+      "version": "v0.1.0"
+    }
+  ],
+  "minCoreVersion": "0.4.0"
+}
