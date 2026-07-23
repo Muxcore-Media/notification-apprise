@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	notifyv1 "github.com/Muxcore-Media/notification-apprise/proto/notifyv1"
+	notifyv1 "github.com/Muxcore-Media/contracts-notification/muxcore/notification/v1"
 )
 
 func testConfig() Config {
