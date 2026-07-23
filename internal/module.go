@@ -16,10 +16,10 @@ import (
 
 	"google.golang.org/grpc"
 
+	notifyv1 "github.com/Muxcore-Media/contracts-notification/muxcore/notification/v1"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	eventsv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/events/v1"
 	"github.com/Muxcore-Media/core/sdk/go/client"
-	notifyv1 "github.com/Muxcore-Media/notification-apprise/proto/notifyv1"
 )
 
 type channelConfig struct {
@@ -139,7 +139,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 		Roles:        []string{"notification"},
 		Description:  "Apprise multi-platform notifications with Discord, Slack, and webhook channel support",
 		Author:       "MuxCore",
-		Capabilities: []string{"notification"},
+		Capabilities: []string{"notification", "notification.apprise"},
 		Contracts: []contracts.ContractDeclaration{
 			{
 				Repo:      "github.com/Muxcore-Media/contracts-notification",
@@ -201,7 +201,7 @@ func (m *Module) dialCore(ctx context.Context) {
 	if meshAddr == "" {
 		meshAddr = "localhost:9090"
 	}
-	insecureMode := os.Getenv("MUXCORE_GRPC_INSECURE") == "true"
+	insecureMode := os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") == "true" || os.Getenv("MUXCORE_GRPC_INSECURE") == "true"
 	var opts []client.Option
 	if insecureMode {
 		opts = append(opts, client.WithInsecure())
