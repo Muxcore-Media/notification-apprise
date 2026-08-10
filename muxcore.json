@@ -1,14 +1,15 @@
 {
   "name": "Notification Apprise",
   "description": "Apprise multi-platform notifications with Discord, Slack, and webhook channel support",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "author": "MuxCore",
   "roles": [
     "notification"
   ],
   "capabilities": [
     "notification",
-    "notification.apprise"
+    "notification.apprise",
+    "settings"
   ],
   "contracts": [
     {
