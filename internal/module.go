@@ -20,6 +20,7 @@ import (
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	eventsv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/events/v1"
 	"github.com/Muxcore-Media/core/sdk/go/client"
+	modulesdk "github.com/Muxcore-Media/core/sdk/go/module"
 )
 
 type channelConfig struct {
@@ -135,7 +136,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Notification Apprise",
-		Version:      "0.1.3",
+		Version:      "0.1.4",
 		Roles:        []string{"notification"},
 		Description:  "Apprise multi-platform notifications with Discord, Slack, and webhook channel support",
 		Author:       "MuxCore",
@@ -165,6 +166,7 @@ func (m *Module) Init(ctx context.Context) error {
 func (m *Module) Start(ctx context.Context) error {
 	m.grpcSrv = grpc.NewServer()
 	notifyv1.RegisterNotificationServiceServer(m.grpcSrv, m)
+	modulesdk.RegisterSettings(m.grpcSrv, m.id, m)
 	go func() {
 		slog.Info("notification-apprise gRPC service started", "addr", m.grpcAddr)
 		if err := m.grpcSrv.Serve(m.lis); err != nil {
@@ -396,7 +398,8 @@ func (m *Module) sendApprise(ctx context.Context, cfg *channelConfig, req *notif
 		}
 	}
 
-	url := m.appriseURL + "/notify"
+	urlBase, token := m.getAppriseEndpoint()
+	url := urlBase + "/notify"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return &notifyv1.ChannelResult{
@@ -406,8 +409,8 @@ func (m *Module) sendApprise(ctx context.Context, cfg *channelConfig, req *notif
 		}
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	if m.appriseToken != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+m.appriseToken)
+	if token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := m.client.Do(httpReq)
