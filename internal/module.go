@@ -135,7 +135,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Notification Apprise",
-		Version:      "0.1.0",
+		Version:      "0.1.3",
 		Roles:        []string{"notification"},
 		Description:  "Apprise multi-platform notifications with Discord, Slack, and webhook channel support",
 		Author:       "MuxCore",
