@@ -252,13 +252,15 @@ func (m *Module) handleEventStream(eventType string, ch <-chan *eventsv1.Event, 
 		if title == "" {
 			continue
 		}
-		m.Notify(context.Background(), &notifyv1.NotifyRequest{
+		if _, err := m.Notify(context.Background(), &notifyv1.NotifyRequest{
 			Title:        title,
 			Message:      message,
 			Severity:     severity,
 			SourceModule: evt.Source,
 			Fields:       fields,
-		})
+		}); err != nil {
+			slog.Warn("notification-apprise: notify failed", "event", eventType, "error", err)
+		}
 	}
 	cancel()
 }
@@ -421,7 +423,7 @@ func (m *Module) sendApprise(ctx context.Context, cfg *channelConfig, req *notif
 			Error:   err.Error(),
 		}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		return &notifyv1.ChannelResult{
@@ -466,7 +468,7 @@ func (m *Module) sendWebhook(ctx context.Context, ch notifyv1.Channel, cfg *chan
 	if err != nil {
 		return &notifyv1.ChannelResult{Channel: ch, Success: false, Error: err.Error()}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		return &notifyv1.ChannelResult{Channel: ch, Success: false, Error: fmt.Sprintf("webhook returned %s", resp.Status)}

@@ -54,7 +54,9 @@ func TestAppriseNotify(t *testing.T) {
 		if r.URL.Path != "/notify" {
 			t.Errorf("expected /notify, got %s", r.URL.Path)
 		}
-		json.NewDecoder(r.Body).Decode(&gotBody)
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -153,7 +155,9 @@ func TestUnconfiguredChannel(t *testing.T) {
 func TestNotifyDiscord(t *testing.T) {
 	var received map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&received)
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -191,7 +195,9 @@ func TestNotifyDiscord(t *testing.T) {
 func TestNotifySlack(t *testing.T) {
 	var received map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&received)
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -215,7 +221,9 @@ func TestNotifySlack(t *testing.T) {
 func TestNotifyGenericWebhook(t *testing.T) {
 	var received map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&received)
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -326,7 +334,9 @@ func TestBuildPayloads(t *testing.T) {
 			t.Fatal(err)
 		}
 		var p map[string]any
-		json.Unmarshal(b, &p)
+		if err := json.Unmarshal(b, &p); err != nil {
+			t.Fatal(err)
+		}
 		embeds := p["embeds"].([]any)
 		embed := embeds[0].(map[string]any)
 		if embed["title"] != "Test" {
@@ -343,7 +353,9 @@ func TestBuildPayloads(t *testing.T) {
 			t.Fatal(err)
 		}
 		var p map[string]any
-		json.Unmarshal(b, &p)
+		if err := json.Unmarshal(b, &p); err != nil {
+			t.Fatal(err)
+		}
 		atts := p["attachments"].([]any)
 		att := atts[0].(map[string]any)
 		if att["color"] != "danger" {
@@ -357,7 +369,9 @@ func TestBuildPayloads(t *testing.T) {
 			t.Fatal(err)
 		}
 		var p map[string]any
-		json.Unmarshal(b, &p)
+		if err := json.Unmarshal(b, &p); err != nil {
+			t.Fatal(err)
+		}
 		if p["title"] != "Test" {
 			t.Errorf("title: expected 'Test', got %v", p["title"])
 		}
