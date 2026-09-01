@@ -5,14 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	notifyv1 "github.com/Muxcore-Media/contracts-notification/muxcore/notification/v1"
 )
-
-func testConfig() Config {
-	return Config{GRPCAddr: ":0"}
-}
 
 func TestModuleInfo(t *testing.T) {
 	m := NewModule(Config{})
@@ -29,10 +26,13 @@ func TestModuleInfo(t *testing.T) {
 	if len(info.Contracts) == 0 {
 		t.Error("Contracts must not be empty")
 	}
+	if info.HTTPAddr != "127.0.0.1:9445" {
+		t.Errorf("default HTTPAddr: got %q", info.HTTPAddr)
+	}
 }
 
 func TestModuleLifecycle(t *testing.T) {
-	m := NewModule(testConfig())
+	m := NewModule(Config{DataDir: t.TempDir(), GRPCAddr: ":0"})
 	ctx := context.Background()
 	if err := m.Init(ctx); err != nil {
 		t.Fatalf("Init: %v", err)
@@ -69,7 +69,7 @@ func TestAppriseNotify(t *testing.T) {
 	resp, err := m.Notify(context.Background(), &notifyv1.NotifyRequest{
 		Title:    "Test Title",
 		Message:  "Test body",
-		Severity: "info",
+		Severity: notifyv1.Severity_SEVERITY_INFO,
 	})
 	if err != nil {
 		t.Fatalf("Notify: %v", err)
@@ -168,7 +168,7 @@ func TestNotifyDiscord(t *testing.T) {
 	resp, err := m.Notify(ctx, &notifyv1.NotifyRequest{
 		Title:        "Test Discord",
 		Message:      "Hello Discord",
-		Severity:     "info",
+		Severity:     notifyv1.Severity_SEVERITY_INFO,
 		SourceModule: "test",
 		Channels:     []notifyv1.Channel{notifyv1.Channel_CHANNEL_DISCORD},
 	})
@@ -207,7 +207,7 @@ func TestNotifySlack(t *testing.T) {
 	resp, err := m.Notify(context.Background(), &notifyv1.NotifyRequest{
 		Title:    "Test Slack",
 		Message:  "Hello Slack",
-		Severity: "warning",
+		Severity: notifyv1.Severity_SEVERITY_WARNING,
 		Channels: []notifyv1.Channel{notifyv1.Channel_CHANNEL_SLACK},
 	})
 	if err != nil {
@@ -295,9 +295,13 @@ func TestNotifyAllWebhookChannels(t *testing.T) {
 }
 
 func TestConfigureWebhook(t *testing.T) {
-	m := NewModule(Config{GRPCAddr: ":0"})
+	m := NewModule(Config{DataDir: t.TempDir(), GRPCAddr: ":0"})
+	ctx := context.Background()
+	if err := m.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := m.Configure(context.Background(), &notifyv1.ConfigureRequest{
+	_, err := m.Configure(ctx, &notifyv1.ConfigureRequest{
 		Channel:  notifyv1.Channel_CHANNEL_DISCORD,
 		Settings: map[string]string{"webhook_url": "https://discord.example.com/new"},
 	})
@@ -319,11 +323,40 @@ func TestConfigureWebhook(t *testing.T) {
 	}
 }
 
+func TestConfigureRejectsEmail(t *testing.T) {
+	m := NewModule(Config{DataDir: t.TempDir(), GRPCAddr: ":0"})
+	ctx := context.Background()
+	if err := m.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, err := m.Configure(ctx, &notifyv1.ConfigureRequest{
+		Channel: notifyv1.Channel_CHANNEL_EMAIL,
+	})
+	if err == nil {
+		t.Fatal("expected error for email channel")
+	}
+}
+
+func TestConfigureRejectsInsecureWebhook(t *testing.T) {
+	m := NewModule(Config{DataDir: t.TempDir(), GRPCAddr: ":0"})
+	ctx := context.Background()
+	if err := m.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, err := m.Configure(ctx, &notifyv1.ConfigureRequest{
+		Channel:  notifyv1.Channel_CHANNEL_DISCORD,
+		Settings: map[string]string{"webhook_url": "http://127.0.0.1/hook"},
+	})
+	if err == nil {
+		t.Fatal("expected error for non-https webhook")
+	}
+}
+
 func TestBuildPayloads(t *testing.T) {
 	req := &notifyv1.NotifyRequest{
 		Title:        "Test",
 		Message:      "Message",
-		Severity:     "error",
+		Severity:     notifyv1.Severity_SEVERITY_ERROR,
 		SourceModule: "test-module",
 		Fields:       map[string]string{"Key": "Value"},
 	}
@@ -375,31 +408,31 @@ func TestBuildPayloads(t *testing.T) {
 		if p["title"] != "Test" {
 			t.Errorf("title: expected 'Test', got %v", p["title"])
 		}
-		if p["severity"] != "error" {
-			t.Errorf("severity: expected 'error', got %v", p["severity"])
+		if p["severity"] != "ERROR" {
+			t.Errorf("severity: expected 'ERROR', got %v", p["severity"])
 		}
 	})
 }
 
 func TestColorHelpers(t *testing.T) {
 	tests := []struct {
-		severity string
+		severity notifyv1.Severity
 		discord  int
 		slack    string
 	}{
-		{"error", 0xE74C3C, "danger"},
-		{"warning", 0xF39C12, "warning"},
-		{"success", 0x2ECC71, "good"},
-		{"info", 0x3498DB, "good"},
-		{"unknown", 0x3498DB, "good"},
+		{notifyv1.Severity_SEVERITY_ERROR, 0xE74C3C, "danger"},
+		{notifyv1.Severity_SEVERITY_WARNING, 0xF39C12, "warning"},
+		{notifyv1.Severity_SEVERITY_SUCCESS, 0x2ECC71, "good"},
+		{notifyv1.Severity_SEVERITY_INFO, 0x3498DB, "good"},
+		{notifyv1.Severity_SEVERITY_UNSPECIFIED, 0x3498DB, "good"},
 	}
 
 	for _, tt := range tests {
 		if got := discordColor(tt.severity); got != tt.discord {
-			t.Errorf("discordColor(%q) = %d, want %d", tt.severity, got, tt.discord)
+			t.Errorf("discordColor(%v) = %d, want %d", tt.severity, got, tt.discord)
 		}
 		if got := slackColor(tt.severity); got != tt.slack {
-			t.Errorf("slackColor(%q) = %q, want %q", tt.severity, got, tt.slack)
+			t.Errorf("slackColor(%v) = %q, want %q", tt.severity, got, tt.slack)
 		}
 	}
 }
@@ -426,6 +459,30 @@ func TestStatusMultipleChannels(t *testing.T) {
 	}
 }
 
+func TestStatusMasksSecrets(t *testing.T) {
+	secretURL := "https://discord.com/api/webhooks/123456789/abcdefghijklmnopqrstuvwxyz"
+	appriseURL := "slack://token_a/token_b/token_c"
+	m := NewModule(Config{
+		AppriseURLs:    appriseURL,
+		DiscordWebhook: secretURL,
+	})
+	resp, err := m.Status(context.Background(), &notifyv1.StatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range resp.Channels {
+		if strings.Contains(st.Description, secretURL) {
+			t.Fatalf("status leaked webhook: %q", st.Description)
+		}
+		if strings.Contains(st.Description, appriseURL) {
+			t.Fatalf("status leaked apprise URL: %q", st.Description)
+		}
+		if strings.Contains(st.Description, "token_a") {
+			t.Fatalf("status leaked slack token: %q", st.Description)
+		}
+	}
+}
+
 func TestHealthNoChannels(t *testing.T) {
 	m := NewModule(Config{})
 	err := m.Health(context.Background())
@@ -443,8 +500,12 @@ func TestHealthWithChannel(t *testing.T) {
 }
 
 func TestConfigure(t *testing.T) {
-	m := NewModule(Config{})
-	_, err := m.Configure(context.Background(), &notifyv1.ConfigureRequest{
+	m := NewModule(Config{DataDir: t.TempDir()})
+	ctx := context.Background()
+	if err := m.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, err := m.Configure(ctx, &notifyv1.ConfigureRequest{
 		Channel: notifyv1.Channel_CHANNEL_APPRISE,
 		Settings: map[string]string{
 			"urls": "tgram://bot_token/chat_id",

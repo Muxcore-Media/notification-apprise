@@ -7,8 +7,8 @@ MuxCore sidecar module (`notification-apprise`). Workspace deploy and SSH: [`../
 | Field | Value |
 |-------|-------|
 | Directory | `notification-apprise` |
-| Capabilities | see muxcore.json |
-| Contracts | none declared |
+| Capabilities | `notification`, `notification.apprise`, `settings` |
+| Contracts | `NotificationProvider` v0.1.0 (`contracts-notification`) |
 
 ## Agent rules
 
@@ -22,5 +22,7 @@ MuxCore sidecar module (`notification-apprise`). Workspace deploy and SSH: [`../
 
 ```bash
 cd notification-apprise
-go test ./...
+nix-shell -p go --run 'go test ./...'
 ```
+
+Settings persist to `$MUXCORE_DATA/notification-apprise/settings.json`. Optional on vault: `MVP_ENABLE_NOTIFICATION_APPRISE=1`.

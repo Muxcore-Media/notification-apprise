@@ -39,17 +39,25 @@ type Module struct {
 	mc       *client.Client
 
 	id           string
+	dataDir      string
+	moduleToken  string
 	grpcAddr     string
 	appriseURL   string
 	appriseURLs  string
 	appriseToken string
 	grpcSrv      *grpc.Server
 	lis          net.Listener
+	prefs        eventPrefs
+	eventMu      sync.Mutex
+	eventCancels []context.CancelFunc
+	stopCh       chan struct{}
 }
 
 type Config struct {
 	ID             string
+	DataDir        string
 	GRPCAddr       string
+	ModuleToken    string
 	AppriseURL     string
 	AppriseURLs    string
 	AppriseToken   string
@@ -63,7 +71,7 @@ func NewModule(cfg Config) *Module {
 		cfg.ID = "notification-apprise"
 	}
 	if cfg.GRPCAddr == "" {
-		cfg.GRPCAddr = ":9445"
+		cfg.GRPCAddr = "127.0.0.1:9445"
 	}
 	if cfg.AppriseURL == "" {
 		cfg.AppriseURL = "http://localhost:8000"
@@ -92,12 +100,19 @@ func NewModule(cfg Config) *Module {
 
 	m := &Module{
 		id:           cfg.ID,
+		dataDir:      cfg.DataDir,
+		moduleToken:  cfg.ModuleToken,
 		grpcAddr:     cfg.GRPCAddr,
 		appriseURL:   cfg.AppriseURL,
 		appriseURLs:  cfg.AppriseURLs,
 		appriseToken: cfg.AppriseToken,
 		client:       &http.Client{Timeout: 10 * time.Second},
 		channels:     map[notifyv1.Channel]*channelConfig{},
+		prefs:        defaultEventPrefs(),
+		stopCh:       make(chan struct{}),
+	}
+	if m.moduleToken == "" {
+		m.moduleToken = moduleTokenFromEnv()
 	}
 
 	if cfg.AppriseURLs != "" {
@@ -154,17 +169,23 @@ func (m *Module) Info() contracts.ModuleInfo {
 }
 
 func (m *Module) Init(ctx context.Context) error {
+	if err := os.MkdirAll(m.dataDirPath(), 0700); err != nil {
+		return fmt.Errorf("create data dir: %w", err)
+	}
+	if err := m.loadPersisted(); err != nil {
+		return err
+	}
 	lis, err := net.Listen("tcp", m.grpcAddr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", m.grpcAddr, err)
 	}
 	m.lis = lis
-	slog.Info("notification-apprise initialized", "addr", m.grpcAddr)
+	slog.Info("notification-apprise initialized", "addr", m.grpcAddr, "data_dir", m.dataDirPath())
 	return nil
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	m.grpcSrv = grpc.NewServer()
+	m.grpcSrv = grpc.NewServer(grpc.UnaryInterceptor(authUnaryInterceptor(m.moduleToken)))
 	notifyv1.RegisterNotificationServiceServer(m.grpcSrv, m)
 	modulesdk.RegisterSettings(m.grpcSrv, m.id, m)
 	go func() {
@@ -173,18 +194,38 @@ func (m *Module) Start(ctx context.Context) error {
 			slog.Error("notification-apprise gRPC serve error", "error", err)
 		}
 	}()
-	go m.dialCore(context.Background())
-	go m.subscribeToMediaEvents()
+	go m.connectCoreAndSubscribe(ctx)
 	return nil
 }
 
 func (m *Module) Stop(ctx context.Context) error {
+	select {
+	case <-m.stopCh:
+	default:
+		close(m.stopCh)
+	}
+	m.cancelEventStreams()
+	m.mu.Lock()
+	if m.mc != nil {
+		_ = m.mc.Close()
+		m.mc = nil
+	}
+	m.mu.Unlock()
 	if m.grpcSrv != nil {
 		m.grpcSrv.GracefulStop()
 	}
 	m.client.CloseIdleConnections()
 	slog.Info("notification-apprise stopped")
 	return nil
+}
+
+func (m *Module) cancelEventStreams() {
+	m.eventMu.Lock()
+	defer m.eventMu.Unlock()
+	for _, cancel := range m.eventCancels {
+		cancel()
+	}
+	m.eventCancels = nil
 }
 
 func (m *Module) Health(ctx context.Context) error {
@@ -198,7 +239,7 @@ func (m *Module) Health(ctx context.Context) error {
 	return fmt.Errorf("no notification channels configured — set APPRISE_URLS, DISCORD_WEBHOOK, SLACK_WEBHOOK, or WEBHOOK_URL")
 }
 
-func (m *Module) dialCore(ctx context.Context) {
+func (m *Module) connectCoreAndSubscribe(ctx context.Context) {
 	meshAddr := os.Getenv("MUXCORE_GRPC_ADDR")
 	if meshAddr == "" {
 		meshAddr = "localhost:9090"
@@ -208,46 +249,116 @@ func (m *Module) dialCore(ctx context.Context) {
 	if insecureMode {
 		opts = append(opts, client.WithInsecure())
 	}
-	c, err := client.Dial(meshAddr, opts...)
-	if err != nil {
-		slog.Error("notification-apprise: dial core", "error", err)
-		return
+
+	backoff := time.Second
+	for {
+		select {
+		case <-m.stopCh:
+			return
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		c, err := client.Dial(meshAddr, opts...)
+		if err != nil {
+			slog.Warn("notification-apprise: dial core failed, retrying", "error", err, "backoff", backoff)
+			select {
+			case <-m.stopCh:
+				return
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			if backoff < 30*time.Second {
+				backoff *= 2
+			}
+			continue
+		}
+
+		m.mu.Lock()
+		if m.mc != nil {
+			_ = m.mc.Close()
+		}
+		m.mc = c
+		m.mu.Unlock()
+		slog.Info("notification-apprise: connected to core mesh", "addr", meshAddr)
+		m.subscribeToMediaEvents(ctx)
+
+		m.mu.Lock()
+		if m.mc != nil {
+			_ = m.mc.Close()
+			m.mc = nil
+		}
+		m.mu.Unlock()
+		m.cancelEventStreams()
+		backoff = time.Second
 	}
-	m.mc = c
-	slog.Info("notification-apprise: connected to core mesh", "addr", meshAddr)
 }
 
-func (m *Module) subscribeToMediaEvents() {
-	time.Sleep(15 * time.Second)
-	if m.mc == nil {
-		slog.Warn("notification-apprise: not connected to core, skipping event subscriptions")
+func (m *Module) subscribeToMediaEvents(ctx context.Context) {
+	m.mu.RLock()
+	mc := m.mc
+	m.mu.RUnlock()
+	if mc == nil {
 		return
 	}
 
 	eventTypes := []string{
 		contracts.EventMovieAdded,
 		contracts.EventMovieRemoved,
+		contracts.EventMovieRequested,
 		contracts.EventMovieFileAdded,
 		contracts.EventTVAdded,
 		contracts.EventTVRemoved,
+		contracts.EventTVRequested,
 		contracts.EventTVEpisodeFileAdded,
 		contracts.EventFileImported,
+		contracts.EventImportFailed,
 		contracts.EventDownloadDispatched,
+		contracts.EventDownloadStarted,
+		contracts.EventDownloadCompleted,
+		contracts.EventDownloadFailed,
 	}
 
 	for _, et := range eventTypes {
-		ch, cancel, err := m.mc.Events.Subscribe(context.Background(), et)
+		select {
+		case <-m.stopCh:
+			return
+		case <-ctx.Done():
+			return
+		default:
+		}
+		subCtx, cancel := context.WithCancel(ctx)
+		ch, subCancel, err := mc.Events.Subscribe(subCtx, et)
 		if err != nil {
+			cancel()
 			slog.Warn("subscribe to event", "type", et, "error", err)
 			continue
 		}
-		go m.handleEventStream(et, ch, cancel)
+		streamCancel := func() {
+			subCancel()
+			cancel()
+		}
+		m.eventMu.Lock()
+		m.eventCancels = append(m.eventCancels, streamCancel)
+		m.eventMu.Unlock()
+		go m.handleEventStream(et, ch, streamCancel)
 		slog.Info("subscribed to events", "type", et)
 	}
+
+	<-m.stopCh
 }
 
 func (m *Module) handleEventStream(eventType string, ch <-chan *eventsv1.Event, cancel context.CancelFunc) {
+	defer cancel()
 	for evt := range ch {
+		m.mu.RLock()
+		allowed := m.prefs.allows(eventType)
+		m.mu.RUnlock()
+		if !allowed {
+			continue
+		}
 		title, message, severity, fields := m.formatNotification(eventType, evt.Payload)
 		if title == "" {
 			continue
@@ -262,10 +373,9 @@ func (m *Module) handleEventStream(eventType string, ch <-chan *eventsv1.Event, 
 			slog.Warn("notification-apprise: notify failed", "event", eventType, "error", err)
 		}
 	}
-	cancel()
 }
 
-func (m *Module) formatNotification(eventType string, payload []byte) (title, message, severity string, fields map[string]string) {
+func (m *Module) formatNotification(eventType string, payload []byte) (title, message string, severity notifyv1.Severity, fields map[string]string) {
 	fields = map[string]string{}
 
 	switch eventType {
@@ -274,7 +384,7 @@ func (m *Module) formatNotification(eventType string, payload []byte) (title, me
 		if json.Unmarshal(payload, &p) != nil {
 			return
 		}
-		return "Movie Added", p.Title, "success", map[string]string{
+		return "Movie Added", p.Title, notifyv1.Severity_SEVERITY_SUCCESS, map[string]string{
 			"TMDB ID": strconv.Itoa(int(p.TMDBID)), "Movie ID": p.MovieID,
 		}
 
@@ -283,14 +393,14 @@ func (m *Module) formatNotification(eventType string, payload []byte) (title, me
 		if json.Unmarshal(payload, &p) != nil {
 			return
 		}
-		return "Movie Removed", p.Title, "warning", map[string]string{"TMDB ID": strconv.Itoa(int(p.TMDBID))}
+		return "Movie Removed", p.Title, notifyv1.Severity_SEVERITY_WARNING, map[string]string{"TMDB ID": strconv.Itoa(int(p.TMDBID))}
 
 	case contracts.EventMovieFileAdded:
 		var p contracts.MovieFileAddedPayload
 		if json.Unmarshal(payload, &p) != nil {
 			return
 		}
-		return "Movie File Added", p.FilePath, "info", map[string]string{
+		return "Movie File Added", p.FilePath, notifyv1.Severity_SEVERITY_INFO, map[string]string{
 			"Quality": p.Quality, "Movie ID": p.MovieID,
 		}
 
@@ -299,7 +409,7 @@ func (m *Module) formatNotification(eventType string, payload []byte) (title, me
 		if json.Unmarshal(payload, &p) != nil {
 			return
 		}
-		return "TV Show Added", p.Name, "success", map[string]string{
+		return "TV Show Added", p.Name, notifyv1.Severity_SEVERITY_SUCCESS, map[string]string{
 			"TMDB ID": strconv.Itoa(int(p.TMDBID)), "Series ID": p.SeriesID,
 		}
 
@@ -308,14 +418,14 @@ func (m *Module) formatNotification(eventType string, payload []byte) (title, me
 		if json.Unmarshal(payload, &p) != nil {
 			return
 		}
-		return "TV Show Removed", p.SeriesID, "warning", nil
+		return "TV Show Removed", p.SeriesID, notifyv1.Severity_SEVERITY_WARNING, nil
 
 	case contracts.EventTVEpisodeFileAdded:
 		var p contracts.TVEpisodeFileAddedPayload
 		if json.Unmarshal(payload, &p) != nil {
 			return
 		}
-		return "Episode File Added", p.FilePath, "info", map[string]string{
+		return "Episode File Added", p.FilePath, notifyv1.Severity_SEVERITY_INFO, map[string]string{
 			"Quality": p.Quality, "Episode ID": p.EpisodeID,
 		}
 
@@ -328,7 +438,7 @@ func (m *Module) formatNotification(eventType string, payload []byte) (title, me
 		if p.MediaType == "tv" {
 			label = "Episode Imported"
 		}
-		return label, fmt.Sprintf("%s (%d)", p.Title, p.Year), "success", map[string]string{
+		return label, fmt.Sprintf("%s (%d)", p.Title, p.Year), notifyv1.Severity_SEVERITY_SUCCESS, map[string]string{
 			"Type": p.MediaType, "Quality": p.Quality, "Path": p.DestinationPath,
 		}
 
@@ -337,12 +447,105 @@ func (m *Module) formatNotification(eventType string, payload []byte) (title, me
 		if json.Unmarshal(payload, &p) != nil {
 			return
 		}
-		return "Download Dispatched", p.Title, "info", map[string]string{
+		return "Download Dispatched", p.Title, notifyv1.Severity_SEVERITY_INFO, map[string]string{
 			"Protocol": p.DownloadProtocol, "Score": strconv.Itoa(int(p.Score)),
+		}
+
+	case contracts.EventDownloadStarted:
+		var p contracts.DownloadEventPayload
+		if json.Unmarshal(payload, &p) != nil {
+			return
+		}
+		name := p.Name
+		if name == "" {
+			name = p.ID
+		}
+		return "Download Started", name, notifyv1.Severity_SEVERITY_INFO, map[string]string{
+			"Download ID": p.ID, "Path": p.SavePath,
+		}
+
+	case contracts.EventMovieRequested:
+		return formatMediaRequested("Movie Requested", payload)
+
+	case contracts.EventTVRequested:
+		return formatMediaRequested("TV Show Requested", payload)
+
+	case contracts.EventDownloadCompleted:
+		var p contracts.DownloadEventPayload
+		if json.Unmarshal(payload, &p) != nil {
+			return
+		}
+		name := p.Name
+		if name == "" {
+			name = p.ID
+		}
+		return "Download Completed", name, notifyv1.Severity_SEVERITY_SUCCESS, map[string]string{
+			"Download ID": p.ID, "Path": p.SavePath,
+		}
+
+	case contracts.EventDownloadFailed:
+		var p contracts.DownloadEventPayload
+		if json.Unmarshal(payload, &p) != nil {
+			return
+		}
+		name := p.Name
+		if name == "" {
+			name = p.ID
+		}
+		msg := name
+		if p.Error != "" {
+			msg = fmt.Sprintf("%s — %s", name, p.Error)
+		}
+		return "Download Failed", msg, notifyv1.Severity_SEVERITY_ERROR, map[string]string{
+			"Download ID": p.ID, "Error": p.Error,
+		}
+
+	case contracts.EventImportFailed:
+		var p contracts.ImportFailedPayload
+		if json.Unmarshal(payload, &p) != nil {
+			return
+		}
+		msg := p.Path
+		if msg == "" {
+			msg = p.DownloadID
+		}
+		if p.Error != "" {
+			msg = fmt.Sprintf("%s — %s", msg, p.Error)
+		}
+		return "Import Failed", msg, notifyv1.Severity_SEVERITY_ERROR, map[string]string{
+			"Download ID": p.DownloadID, "Path": p.Path, "Error": p.Error,
 		}
 	}
 
 	return
+}
+
+func formatMediaRequested(label string, payload []byte) (title, message string, severity notifyv1.Severity, fields map[string]string) {
+	var p map[string]any
+	if json.Unmarshal(payload, &p) != nil {
+		return
+	}
+	titleStr, _ := p["title"].(string)
+	if titleStr == "" {
+		return
+	}
+	message = titleStr
+	if yr, ok := p["year"].(float64); ok && yr > 0 {
+		message = fmt.Sprintf("%s (%d)", titleStr, int(yr))
+	}
+	fields = map[string]string{}
+	if requester, _ := p["requested_by"].(string); requester != "" {
+		fields["Requester"] = requester
+	} else if approved, _ := p["approved_by"].(string); approved != "" {
+		fields["Requester"] = approved
+	}
+	if id, _ := p["request_id"].(string); id != "" {
+		fields["Request ID"] = id
+	}
+	if tmdb, ok := p["tmdb_id"].(float64); ok && tmdb > 0 {
+		fields["TMDB ID"] = strconv.Itoa(int(tmdb))
+	}
+	return label, message, notifyv1.Severity_SEVERITY_INFO, fields
 }
 
 func (m *Module) Notify(ctx context.Context, req *notifyv1.NotifyRequest) (*notifyv1.NotifyResponse, error) {
@@ -490,15 +693,13 @@ func (m *Module) buildApprisePayload(req *notifyv1.NotifyRequest, urls string) (
 	return json.Marshal(body)
 }
 
-func (m *Module) severityToPriority(severity string) string {
+func (m *Module) severityToPriority(severity notifyv1.Severity) string {
 	switch severity {
-	case "info":
+	case notifyv1.Severity_SEVERITY_INFO:
 		return "low"
-	case "success":
+	case notifyv1.Severity_SEVERITY_SUCCESS, notifyv1.Severity_SEVERITY_WARNING:
 		return "normal"
-	case "warning":
-		return "normal"
-	case "error":
+	case notifyv1.Severity_SEVERITY_ERROR:
 		return "high"
 	default:
 		return ""
@@ -558,52 +759,123 @@ func buildWebhookPayload(req *notifyv1.NotifyRequest) ([]byte, error) {
 	return json.Marshal(map[string]any{
 		"title":     req.GetTitle(),
 		"message":   req.GetMessage(),
-		"severity":  req.GetSeverity(),
+		"severity":  severityLabel(req.GetSeverity()),
 		"source":    req.GetSourceModule(),
 		"fields":    req.GetFields(),
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	})
 }
 
-func discordColor(severity string) int {
-	switch strings.ToLower(severity) {
-	case "error":
+func discordColor(severity notifyv1.Severity) int {
+	switch severity {
+	case notifyv1.Severity_SEVERITY_ERROR:
 		return 0xE74C3C
-	case "warning":
+	case notifyv1.Severity_SEVERITY_WARNING:
 		return 0xF39C12
-	case "success":
+	case notifyv1.Severity_SEVERITY_SUCCESS:
 		return 0x2ECC71
 	default:
 		return 0x3498DB
 	}
 }
 
-func slackColor(severity string) string {
-	switch strings.ToLower(severity) {
-	case "error":
+func slackColor(severity notifyv1.Severity) string {
+	switch severity {
+	case notifyv1.Severity_SEVERITY_ERROR:
 		return "danger"
-	case "warning":
+	case notifyv1.Severity_SEVERITY_WARNING:
 		return "warning"
 	default:
 		return "good"
 	}
 }
 
-func (m *Module) Configure(ctx context.Context, req *notifyv1.ConfigureRequest) (*notifyv1.ConfigureResponse, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func severityLabel(severity notifyv1.Severity) string {
+	switch severity {
+	case notifyv1.Severity_SEVERITY_ERROR:
+		return "ERROR"
+	case notifyv1.Severity_SEVERITY_WARNING:
+		return "WARNING"
+	case notifyv1.Severity_SEVERITY_SUCCESS:
+		return "SUCCESS"
+	case notifyv1.Severity_SEVERITY_INFO:
+		return "INFO"
+	default:
+		return ""
+	}
+}
 
-	cfg := &channelConfig{
-		Enabled:  true,
-		Settings: req.GetSettings(),
+func (m *Module) Configure(ctx context.Context, req *notifyv1.ConfigureRequest) (*notifyv1.ConfigureResponse, error) {
+	ch := req.GetChannel()
+	if ch == notifyv1.Channel_CHANNEL_UNSPECIFIED {
+		return nil, fmt.Errorf("channel must be specified")
 	}
-	if urls, ok := req.GetSettings()["urls"]; ok {
-		cfg.URLs = urls
+	if ch == notifyv1.Channel_CHANNEL_EMAIL {
+		return nil, fmt.Errorf("email channel is not supported by notification-apprise")
 	}
-	if url, ok := req.GetSettings()["webhook_url"]; ok {
-		cfg.Webhook = url
+
+	settings := req.GetSettings()
+	if settings == nil {
+		settings = map[string]string{}
 	}
-	m.channels[req.GetChannel()] = cfg
+
+	switch ch {
+	case notifyv1.Channel_CHANNEL_APPRISE:
+		urls := strings.TrimSpace(settings["urls"])
+		if urls == "" {
+			m.mu.Lock()
+			delete(m.channels, ch)
+			m.mu.Unlock()
+			if err := m.persistSettings(); err != nil {
+				return &notifyv1.ConfigureResponse{Configured: false}, err
+			}
+			return &notifyv1.ConfigureResponse{Configured: true}, nil
+		}
+		m.mu.Lock()
+		m.channels[ch] = &channelConfig{
+			Enabled: true,
+			URLs:    urls,
+			Settings: map[string]string{
+				"type": "apprise",
+				"urls": urls,
+			},
+		}
+		m.mu.Unlock()
+	case notifyv1.Channel_CHANNEL_DISCORD, notifyv1.Channel_CHANNEL_SLACK, notifyv1.Channel_CHANNEL_WEBHOOK:
+		url := strings.TrimSpace(settings["webhook_url"])
+		if url == "" {
+			m.mu.Lock()
+			delete(m.channels, ch)
+			m.mu.Unlock()
+			if err := m.persistSettings(); err != nil {
+				return &notifyv1.ConfigureResponse{Configured: false}, err
+			}
+			return &notifyv1.ConfigureResponse{Configured: true}, nil
+		}
+		if err := validateWebhookURL(ctx, url); err != nil {
+			return &notifyv1.ConfigureResponse{Configured: false}, err
+		}
+		typ := "generic"
+		switch ch {
+		case notifyv1.Channel_CHANNEL_DISCORD:
+			typ = "discord"
+		case notifyv1.Channel_CHANNEL_SLACK:
+			typ = "slack"
+		}
+		m.mu.Lock()
+		m.channels[ch] = &channelConfig{
+			Enabled:  true,
+			Webhook:  url,
+			Settings: map[string]string{"type": typ, "webhook_url": url},
+		}
+		m.mu.Unlock()
+	default:
+		return nil, fmt.Errorf("unsupported channel %s", ch)
+	}
+
+	if err := m.persistSettings(); err != nil {
+		return &notifyv1.ConfigureResponse{Configured: false}, err
+	}
 	return &notifyv1.ConfigureResponse{Configured: true}, nil
 }
 
@@ -630,16 +902,12 @@ func channelDescription(ch notifyv1.Channel, cfg *channelConfig) string {
 	if cfg.Enabled {
 		desc = "enabled"
 	}
-	url := cfg.URLs
-	if url == "" {
-		url = cfg.Webhook
+	if cfg.URLs != "" {
+		desc += " — " + modulesdk.MaskSecret(cfg.URLs)
+	} else if cfg.Webhook != "" {
+		desc += " — " + modulesdk.MaskSecret(cfg.Webhook)
 	}
-	if url != "" {
-		if len(url) > 60 {
-			url = url[:60] + "..."
-		}
-		desc += " — " + url
-	}
+	_ = ch
 	return desc
 }
 

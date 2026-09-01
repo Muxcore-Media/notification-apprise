@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -14,7 +15,11 @@ func (m *Module) Settings() []contracts.SettingDef {
 }
 
 func (m *Module) UpdateSetting(key, value string) error {
-	return m.updateSetting(key, value)
+	err := m.updateSetting(key, value)
+	if err != nil {
+		return err
+	}
+	return m.persistSettings()
 }
 
 func (m *Module) settingsDefs() []contracts.SettingDef {
@@ -38,7 +43,7 @@ func (m *Module) settingsDefs() []contracts.SettingDef {
 		appriseURLs = m.appriseURLs
 	}
 
-	return []contracts.SettingDef{
+	defs := []contracts.SettingDef{
 		{Key: "apprise_url", Label: "Apprise Base URL", Type: contracts.SettingTypeString,
 			Value: m.appriseURL, Group: "Apprise", Description: "APPRISE_URL"},
 		{Key: "apprise_urls", Label: "Apprise Notification URLs", Type: contracts.SettingTypeSecret,
@@ -52,6 +57,36 @@ func (m *Module) settingsDefs() []contracts.SettingDef {
 		{Key: "webhook_url", Label: "Generic Webhook URL", Type: contracts.SettingTypeSecret,
 			Value: modulesdk.MaskSecret(webhook), Group: "Channels", Description: "WEBHOOK_URL"},
 	}
+
+	eventSettings := []struct {
+		key  string
+		val  bool
+		desc string
+	}{
+		{"notify_requested", m.prefs.NotifyRequested, "media.movie.requested / media.tv.requested"},
+		{"notify_file_added", m.prefs.NotifyFileAdded, "movie/episode file added and file imported"},
+		{"notify_import_failed", m.prefs.NotifyImportFailed, "import.failed"},
+		{"notify_download_failed", m.prefs.NotifyDownloadFailed, "download.failed"},
+		{"notify_download_started", m.prefs.NotifyDownloadStarted, "download.started"},
+		{"notify_download_completed", m.prefs.NotifyDownloadCompleted, "download.completed"},
+		{"notify_download_dispatched", m.prefs.NotifyDownloadDispatched, "download.dispatched"},
+		{"notify_media_added", m.prefs.NotifyMediaAdded, "movie/tv added"},
+		{"notify_media_removed", m.prefs.NotifyMediaRemoved, "movie/tv removed"},
+	}
+	for _, es := range eventSettings {
+		defs = append(defs, contracts.SettingDef{
+			Key: es.key, Label: es.key, Type: contracts.SettingTypeBool,
+			Value: boolString(es.val), Group: "Events", Description: es.desc,
+		})
+	}
+	return defs
+}
+
+func boolString(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
 }
 
 func (m *Module) updateSetting(key, value string) error {
@@ -97,37 +132,50 @@ func (m *Module) updateSetting(key, value string) error {
 		if value == "********" {
 			return nil
 		}
-		m.setWebhookChannel(notifyv1.Channel_CHANNEL_DISCORD, value, "discord")
-		return nil
+		return m.setWebhookChannel(notifyv1.Channel_CHANNEL_DISCORD, value, "discord")
 	case "slack_webhook", "SLACK_WEBHOOK":
 		if value == "********" {
 			return nil
 		}
-		m.setWebhookChannel(notifyv1.Channel_CHANNEL_SLACK, value, "slack")
-		return nil
+		return m.setWebhookChannel(notifyv1.Channel_CHANNEL_SLACK, value, "slack")
 	case "webhook_url", "WEBHOOK_URL":
 		if value == "********" {
 			return nil
 		}
-		m.setWebhookChannel(notifyv1.Channel_CHANNEL_WEBHOOK, value, "generic")
-		return nil
+		return m.setWebhookChannel(notifyv1.Channel_CHANNEL_WEBHOOK, value, "generic")
 	default:
+		if set, ok := eventPrefKey(key); ok {
+			enabled, err := parseBoolSetting(value)
+			if err != nil {
+				return err
+			}
+			m.mu.Lock()
+			set(&m.prefs, enabled)
+			m.mu.Unlock()
+			return nil
+		}
 		return fmt.Errorf("unknown setting %q", key)
 	}
 }
 
-func (m *Module) setWebhookChannel(ch notifyv1.Channel, url, typ string) {
+func (m *Module) setWebhookChannel(ch notifyv1.Channel, url, typ string) error {
+	if url != "" {
+		if err := validateWebhookURL(context.Background(), url); err != nil {
+			return err
+		}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if url == "" {
 		delete(m.channels, ch)
-		return
+		return nil
 	}
 	m.channels[ch] = &channelConfig{
 		Enabled:  true,
 		Webhook:  url,
 		Settings: map[string]string{"type": typ},
 	}
+	return nil
 }
 
 func (m *Module) getAppriseEndpoint() (baseURL, token string) {

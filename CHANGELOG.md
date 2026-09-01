@@ -12,7 +12,7 @@
 - SettingsProvider mesh (`RegisterSettings`) for Apprise URL/token and Discord/Slack/webhook channels.
 
 ### Changed
-- Pin `core/sdk/go/module` to **v0.5.2**.
+- Pin `core/sdk/go/module` to **v0.5.8**.
 
 
 ## [0.1.3] — 2026-08-10
