@@ -1,11 +1,14 @@
 FROM golang:1.26-alpine AS builder
-COPY core/ /build/core/
-COPY notification-apprise/ /build/notification-apprise/
-WORKDIR /build/notification-apprise
-RUN go mod download && CGO_ENABLED=0 go build -o /notification-apprise ./cmd/module
-FROM alpine:3.21
-RUN adduser -D -h /data app
-USER app
-WORKDIR /app
-COPY --from=builder /notification-apprise .
-ENTRYPOINT ["./notification-apprise"]
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=0.0.0-dev
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=${VERSION}" -o /build/notification-apprise ./cmd/module
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=builder /build/notification-apprise /notification-apprise
+EXPOSE 9445
+HEALTHCHECK --interval=30s --timeout=5s --start-period=3s --retries=3 \
+  CMD ["/notification-apprise", "--health-check"]
+ENTRYPOINT ["/notification-apprise"]
