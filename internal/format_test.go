@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	mediaevents "github.com/Muxcore-Media/contracts-media/events"
 	notifyv1 "github.com/Muxcore-Media/contracts-notification/muxcore/notification/v1"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 )
@@ -48,7 +49,7 @@ func TestFormatMediaRequested(t *testing.T) {
 		"title": "Dune", "year": 2021, "tmdb_id": 438631,
 		"request_id": "req-1", "requested_by": "ender",
 	})
-	title, msg, sev, fields := m.formatNotification(contracts.EventMovieRequested, movie)
+	title, msg, sev, fields := m.formatNotification(mediaevents.EventMovieRequested, movie)
 	if title != "Movie Requested" || msg != "Dune (2021)" || sev != notifyv1.Severity_SEVERITY_INFO {
 		t.Fatalf("movie requested: %q %q %v", title, msg, sev)
 	}

@@ -62,6 +62,7 @@ func TestAppriseNotify(t *testing.T) {
 	defer srv.Close()
 
 	m := NewModule(Config{
+		GRPCAddr:    "127.0.0.1:0",
 		AppriseURL:  srv.URL,
 		AppriseURLs: "slack://token_a/token_b/token_c",
 	})
@@ -107,6 +108,7 @@ func TestAppriseTokenAuth(t *testing.T) {
 	defer srv.Close()
 
 	m := NewModule(Config{
+		GRPCAddr:     "127.0.0.1:0",
 		AppriseURL:   srv.URL,
 		AppriseURLs:  "slack://token",
 		AppriseToken: "my-secret-token",
@@ -127,6 +129,7 @@ func TestAppriseTokenAuth(t *testing.T) {
 
 func TestAppriseDefaultURL(t *testing.T) {
 	m := NewModule(Config{
+		GRPCAddr:    "127.0.0.1:0",
 		AppriseURLs: "slack://token",
 	})
 	if m.appriseURL != "http://localhost:8000" {
@@ -135,7 +138,7 @@ func TestAppriseDefaultURL(t *testing.T) {
 }
 
 func TestUnconfiguredChannel(t *testing.T) {
-	m := NewModule(Config{})
+	m := NewModule(Config{GRPCAddr: "127.0.0.1:0"})
 	resp, err := m.Notify(context.Background(), &notifyv1.NotifyRequest{
 		Title:    "test",
 		Message:  "test",
@@ -438,7 +441,7 @@ func TestColorHelpers(t *testing.T) {
 }
 
 func TestHealthWithWebhookChannel(t *testing.T) {
-	m := NewModule(Config{DiscordWebhook: "https://discord.gg/webhook"})
+	m := NewModule(Config{GRPCAddr: "127.0.0.1:0", DiscordWebhook: "https://discord.gg/webhook"})
 	err := m.Health(context.Background())
 	if err != nil {
 		t.Errorf("expected Health() to pass, got: %v", err)
@@ -447,6 +450,7 @@ func TestHealthWithWebhookChannel(t *testing.T) {
 
 func TestStatusMultipleChannels(t *testing.T) {
 	m := NewModule(Config{
+		GRPCAddr:       "127.0.0.1:0",
 		AppriseURLs:    "slack://token",
 		DiscordWebhook: "https://discord.gg/webhook",
 	})
@@ -463,6 +467,7 @@ func TestStatusMasksSecrets(t *testing.T) {
 	secretURL := "https://discord.com/api/webhooks/123456789/abcdefghijklmnopqrstuvwxyz"
 	appriseURL := "slack://token_a/token_b/token_c"
 	m := NewModule(Config{
+		GRPCAddr:       "127.0.0.1:0",
 		AppriseURLs:    appriseURL,
 		DiscordWebhook: secretURL,
 	})
@@ -484,7 +489,7 @@ func TestStatusMasksSecrets(t *testing.T) {
 }
 
 func TestHealthNoChannels(t *testing.T) {
-	m := NewModule(Config{})
+	m := NewModule(Config{GRPCAddr: "127.0.0.1:0"})
 	err := m.Health(context.Background())
 	if err == nil {
 		t.Error("expected Health() to fail with no channels configured")
@@ -492,7 +497,7 @@ func TestHealthNoChannels(t *testing.T) {
 }
 
 func TestHealthWithChannel(t *testing.T) {
-	m := NewModule(Config{AppriseURLs: "slack://token"})
+	m := NewModule(Config{GRPCAddr: "127.0.0.1:0", AppriseURLs: "slack://token"})
 	err := m.Health(context.Background())
 	if err != nil {
 		t.Errorf("expected Health() to pass, got: %v", err)
@@ -500,7 +505,7 @@ func TestHealthWithChannel(t *testing.T) {
 }
 
 func TestConfigure(t *testing.T) {
-	m := NewModule(Config{DataDir: t.TempDir()})
+	m := NewModule(Config{GRPCAddr: "127.0.0.1:0", DataDir: t.TempDir()})
 	ctx := context.Background()
 	if err := m.Init(ctx); err != nil {
 		t.Fatal(err)
@@ -530,7 +535,7 @@ func TestConfigure(t *testing.T) {
 }
 
 func TestStatus(t *testing.T) {
-	m := NewModule(Config{AppriseURLs: "slack://token"})
+	m := NewModule(Config{GRPCAddr: "127.0.0.1:0", AppriseURLs: "slack://token"})
 	resp, err := m.Status(context.Background(), &notifyv1.StatusRequest{})
 	if err != nil {
 		t.Fatalf("Status: %v", err)

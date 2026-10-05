@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	mediaevents "github.com/Muxcore-Media/contracts-media/events"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 )
 
@@ -35,7 +36,7 @@ func defaultEventPrefs() eventPrefs {
 
 func (p eventPrefs) allows(eventType string) bool {
 	switch eventType {
-	case contracts.EventMovieRequested, contracts.EventTVRequested:
+	case mediaevents.EventMovieRequested, mediaevents.EventTVRequested:
 		return p.NotifyRequested
 	case contracts.EventMovieFileAdded, contracts.EventTVEpisodeFileAdded, contracts.EventFileImported:
 		return p.NotifyFileAdded

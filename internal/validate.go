@@ -8,6 +8,9 @@ import (
 	"strings"
 )
 
+// lookupHost resolves webhook hosts for the private-address check; tests stub it.
+var lookupHost = net.DefaultResolver.LookupHost
+
 func validateWebhookURL(ctx context.Context, raw string) error {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -30,7 +33,7 @@ func validateWebhookURL(ctx context.Context, raw string) error {
 		}
 		return nil
 	}
-	addrs, err := net.DefaultResolver.LookupHost(ctx, host)
+	addrs, err := lookupHost(ctx, host)
 	if err != nil {
 		return fmt.Errorf("webhook host lookup failed: %w", err)
 	}

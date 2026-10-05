@@ -16,6 +16,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	mediaevents "github.com/Muxcore-Media/contracts-media/events"
 	notifyv1 "github.com/Muxcore-Media/contracts-notification/muxcore/notification/v1"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	eventsv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/events/v1"
@@ -307,11 +308,11 @@ func (m *Module) subscribeToMediaEvents(ctx context.Context) {
 	eventTypes := []string{
 		contracts.EventMovieAdded,
 		contracts.EventMovieRemoved,
-		contracts.EventMovieRequested,
+		mediaevents.EventMovieRequested,
 		contracts.EventMovieFileAdded,
 		contracts.EventTVAdded,
 		contracts.EventTVRemoved,
-		contracts.EventTVRequested,
+		mediaevents.EventTVRequested,
 		contracts.EventTVEpisodeFileAdded,
 		contracts.EventFileImported,
 		contracts.EventImportFailed,
@@ -464,10 +465,10 @@ func (m *Module) formatNotification(eventType string, payload []byte) (title, me
 			"Download ID": p.ID, "Path": p.SavePath,
 		}
 
-	case contracts.EventMovieRequested:
+	case mediaevents.EventMovieRequested:
 		return formatMediaRequested("Movie Requested", payload)
 
-	case contracts.EventTVRequested:
+	case mediaevents.EventTVRequested:
 		return formatMediaRequested("TV Show Requested", payload)
 
 	case contracts.EventDownloadCompleted:

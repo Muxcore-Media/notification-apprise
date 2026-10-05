@@ -11,7 +11,7 @@ import (
 
 func TestSettingsAppriseAndWebhooks(t *testing.T) {
 	dir := t.TempDir()
-	m := NewModule(Config{DataDir: dir, AppriseURL: "http://127.0.0.1:8000", AppriseURLs: "mailto://old"})
+	m := NewModule(Config{GRPCAddr: "127.0.0.1:0", DataDir: dir, AppriseURL: "http://127.0.0.1:8000", AppriseURLs: "mailto://old"})
 	if err := m.Init(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestSettingsPersistAcrossRestart(t *testing.T) {
 }
 
 func TestEventPrefMute(t *testing.T) {
-	m := NewModule(Config{})
+	m := NewModule(Config{GRPCAddr: "127.0.0.1:0"})
 	m.prefs.NotifyRequested = false
 	if m.prefs.allows("media.movie.requested") {
 		t.Fatal("expected requested events muted")
@@ -94,7 +94,7 @@ func TestEventPrefMute(t *testing.T) {
 }
 
 func TestUpdateSettingRejectsInsecureWebhook(t *testing.T) {
-	m := NewModule(Config{DataDir: t.TempDir()})
+	m := NewModule(Config{DataDir: t.TempDir(), GRPCAddr: "127.0.0.1:0"})
 	if err := m.Init(t.Context()); err != nil {
 		t.Fatal(err)
 	}
