@@ -22,6 +22,7 @@ import (
 	eventsv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/events/v1"
 	"github.com/Muxcore-Media/core/sdk/go/client"
 	modulesdk "github.com/Muxcore-Media/core/sdk/go/module"
+	manifest "github.com/Muxcore-Media/notification-apprise"
 )
 
 type channelConfig struct {
@@ -152,7 +153,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Notification Apprise",
-		Version:      "0.1.5",
+		Version:      modulesdk.ManifestVersion(manifest.ManifestJSON),
 		Roles:        []string{"notification"},
 		Description:  "Apprise multi-platform notifications with Discord, Slack, and webhook channel support",
 		Author:       "MuxCore",
