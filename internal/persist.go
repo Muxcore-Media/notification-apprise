@@ -3,10 +3,12 @@ package internal
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
 	notifyv1 "github.com/Muxcore-Media/contracts-notification/muxcore/notification/v1"
+	"github.com/Muxcore-Media/core/sdk/go/module/netguard"
 )
 
 type persistedChannel struct {
@@ -54,7 +56,11 @@ func (m *Module) loadPersisted() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if ps.AppriseURL != "" {
-		m.appriseURL = ps.AppriseURL
+		if err := validateAppriseURL(ps.AppriseURL); err != nil {
+			slog.Warn("ignoring persisted apprise_url", "error", err)
+		} else {
+			m.appriseURL = ps.AppriseURL
+		}
 	}
 	if ps.AppriseToken != "" {
 		m.appriseToken = ps.AppriseToken
@@ -65,6 +71,12 @@ func (m *Module) loadPersisted() error {
 			ch, ok := channelFromPersistName(name)
 			if !ok {
 				continue
+			}
+			if pc.Webhook != "" {
+				if err := netguard.ValidateURL(pc.Webhook, netguard.UserURL, webhookOpts); err != nil {
+					slog.Warn("ignoring persisted webhook", "channel", name, "error", err)
+					continue
+				}
 			}
 			settings := pc.Settings
 			if settings == nil {

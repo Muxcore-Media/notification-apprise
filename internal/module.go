@@ -22,6 +22,7 @@ import (
 	eventsv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/events/v1"
 	"github.com/Muxcore-Media/core/sdk/go/client"
 	modulesdk "github.com/Muxcore-Media/core/sdk/go/module"
+	"github.com/Muxcore-Media/core/sdk/go/module/netguard"
 	manifest "github.com/Muxcore-Media/notification-apprise"
 )
 
@@ -37,8 +38,10 @@ type Module struct {
 
 	mu       sync.RWMutex
 	channels map[notifyv1.Channel]*channelConfig
-	client   *http.Client
-	mc       *client.Client
+	client   *http.Client // webhooks: netguard UserURL profile
+	// appriseClient talks to the admin-configured Apprise server (Integration profile).
+	appriseClient *http.Client
+	mc            *client.Client
 
 	id           string
 	dataDir      string
@@ -101,17 +104,18 @@ func NewModule(cfg Config) *Module {
 	}
 
 	m := &Module{
-		id:           cfg.ID,
-		dataDir:      cfg.DataDir,
-		moduleToken:  cfg.ModuleToken,
-		grpcAddr:     cfg.GRPCAddr,
-		appriseURL:   cfg.AppriseURL,
-		appriseURLs:  cfg.AppriseURLs,
-		appriseToken: cfg.AppriseToken,
-		client:       &http.Client{Timeout: 10 * time.Second},
-		channels:     map[notifyv1.Channel]*channelConfig{},
-		prefs:        defaultEventPrefs(),
-		stopCh:       make(chan struct{}),
+		id:            cfg.ID,
+		dataDir:       cfg.DataDir,
+		moduleToken:   cfg.ModuleToken,
+		grpcAddr:      cfg.GRPCAddr,
+		appriseURL:    cfg.AppriseURL,
+		appriseURLs:   cfg.AppriseURLs,
+		appriseToken:  cfg.AppriseToken,
+		client:        netguard.NewClient(netguard.UserURL, webhookOpts),
+		appriseClient: netguard.NewClient(netguard.Integration, appriseOpts),
+		channels:      map[notifyv1.Channel]*channelConfig{},
+		prefs:         defaultEventPrefs(),
+		stopCh:        make(chan struct{}),
 	}
 	if m.moduleToken == "" {
 		m.moduleToken = moduleTokenFromEnv()
@@ -607,6 +611,9 @@ func (m *Module) sendApprise(ctx context.Context, cfg *channelConfig, req *notif
 
 	urlBase, token := m.getAppriseEndpoint()
 	url := urlBase + "/notify"
+	if err := validateAppriseURL(url); err != nil {
+		return &notifyv1.ChannelResult{Channel: notifyv1.Channel_CHANNEL_APPRISE, Success: false, Error: err.Error()}
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return &notifyv1.ChannelResult{
@@ -620,7 +627,7 @@ func (m *Module) sendApprise(ctx context.Context, cfg *channelConfig, req *notif
 		httpReq.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := m.client.Do(httpReq)
+	resp, err := m.appriseClient.Do(httpReq)
 	if err != nil {
 		return &notifyv1.ChannelResult{
 			Channel: notifyv1.Channel_CHANNEL_APPRISE,

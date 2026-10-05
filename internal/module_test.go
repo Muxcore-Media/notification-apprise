@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	notifyv1 "github.com/Muxcore-Media/contracts-notification/muxcore/notification/v1"
 )
@@ -165,7 +166,7 @@ func TestNotifyDiscord(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := NewModule(Config{GRPCAddr: ":0", DiscordWebhook: srv.URL})
+	m := unguard(NewModule(Config{GRPCAddr: ":0", DiscordWebhook: srv.URL}))
 	ctx := context.Background()
 
 	resp, err := m.Notify(ctx, &notifyv1.NotifyRequest{
@@ -205,7 +206,7 @@ func TestNotifySlack(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := NewModule(Config{GRPCAddr: ":0", SlackWebhook: srv.URL})
+	m := unguard(NewModule(Config{GRPCAddr: ":0", SlackWebhook: srv.URL}))
 
 	resp, err := m.Notify(context.Background(), &notifyv1.NotifyRequest{
 		Title:    "Test Slack",
@@ -231,7 +232,7 @@ func TestNotifyGenericWebhook(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := NewModule(Config{GRPCAddr: ":0", GenericWebhook: srv.URL})
+	m := unguard(NewModule(Config{GRPCAddr: ":0", GenericWebhook: srv.URL}))
 
 	resp, err := m.Notify(context.Background(), &notifyv1.NotifyRequest{
 		Title:   "Generic",
@@ -252,7 +253,7 @@ func TestNotifyWebhookFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := NewModule(Config{GRPCAddr: ":0", DiscordWebhook: srv.URL})
+	m := unguard(NewModule(Config{GRPCAddr: ":0", DiscordWebhook: srv.URL}))
 
 	resp, err := m.Notify(context.Background(), &notifyv1.NotifyRequest{
 		Title:    "Fail",
@@ -273,12 +274,12 @@ func TestNotifyAllWebhookChannels(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := NewModule(Config{
+	m := unguard(NewModule(Config{
 		GRPCAddr:       ":0",
 		DiscordWebhook: srv.URL,
 		SlackWebhook:   srv.URL,
 		GenericWebhook: srv.URL,
-	})
+	}))
 
 	resp, err := m.Notify(context.Background(), &notifyv1.NotifyRequest{
 		Title:   "All channels",
@@ -550,4 +551,10 @@ func TestStatus(t *testing.T) {
 	if !ch.Enabled {
 		t.Error("channel should be enabled")
 	}
+}
+
+// unguard lets tests target loopback httptest servers with plain http.
+func unguard(m *Module) *Module {
+	m.client = &http.Client{Timeout: 5 * time.Second}
+	return m
 }

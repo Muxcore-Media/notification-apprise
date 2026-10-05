@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.9] - 2026-10-05
+
+
+### Security
+- NFR-SEC-009 / RULE-VAL-2: webhook (Discord/Slack/generic) URLs are checked with netguard `UserURL` (https only; private, loopback, link-local and metadata targets blocked) at configure time, on load of persisted settings (unsafe persisted webhooks/apprise_url are ignored), and again at send time via a dial-time/redirect-guarded client (DNS rebinding, redirects). The Apprise server endpoint (`apprise_url`) uses netguard `Integration` (LAN/loopback allowed, metadata/link-local blocked). Built on sdk/go/module v0.6.6.
+
 ## [0.1.8] - 2026-10-05
 
 ### Changed

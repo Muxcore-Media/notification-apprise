@@ -96,6 +96,9 @@ func (m *Module) updateSetting(key, value string) error {
 		if value == "" {
 			return fmt.Errorf("apprise_url must not be empty")
 		}
+		if err := validateAppriseURL(value); err != nil {
+			return err
+		}
 		m.mu.Lock()
 		m.appriseURL = strings.TrimRight(value, "/")
 		m.mu.Unlock()
